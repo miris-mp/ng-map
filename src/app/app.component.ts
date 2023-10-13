@@ -1,36 +1,34 @@
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 
 import * as L from 'leaflet';
 import { ApiService } from './api.service';
 
 var url = new URL(window.location.href);
-var mark = url.searchParams.get('mark');
-var all_data = url.searchParams.get('all');
-
-const WOM_TILES_URL =
-  'http://localhost:8000/api/v1/tiles/{z}/{x}/{y}/' +
-  (mark == undefined ? '' : mark + '/') +
-  (all_data == undefined ? '' : all_data + '/');
 
 @Component({
   selector: 'app-root',
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.scss'],
 })
-export class AppComponent {
+export class AppComponent implements OnInit {
   title = 'leaflet-map';
   private map: any;
   serverData: any;
 
+  tilesAcross = 7;
+  tilesDown = 4;
+
   constructor(private http: HttpClient, private apiService: ApiService) {}
 
-  ngOnInit(): void {}
+  ngOnInit(): void {
+    this.initMap();
+  }
 
   private initMap(): void {
     this.map = L.map('map', {
-      center: [43.8985, 12.8788],
-      zoom: 10,
+      center: [42.986211, 13.865771],
+      zoom: 8,
     });
 
     var i = Math.ceil(Math.random() * 4);
@@ -42,45 +40,18 @@ export class AppComponent {
       }
     ).addTo(this.map);
 
-    //const tiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png', {
-    const tiles = L.tileLayer(
-      'http://localhost:8000/api/v1/tiles/10/13.8412642/42.9857861/',
-      {
-        maxZoom: 18,
-        minZoom: 3,
-        attribution:
-          '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }
-    ).addTo(this.map);
+    const tiles = L.tileLayer(`http://localhost:8000/test/{z}/{x}/{y}`, {
+      maxZoom: 18,
+      minZoom: 3,
+      attribution:
+        '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(this.map);
 
     this.map.on('click', function (e: any) {
       console.log(e.latlng.lat);
-
-      let clickPos = [e.latlng.lat, e.latlng.lng];
-      getPath(clickPos);
     });
 
-    function getPath(clickPos: any) {
-      let zoom = 10;
-      // the offset determines the size of the border box
-      let offset = 16 / Math.pow(2, zoom);
-      // the vertexes (NW, SE) of the border box
-      let nw = L.latLng(clickPos[0] - offset, clickPos[1] - offset);
-      let se = L.latLng(clickPos[0] + offset, clickPos[1] + offset);
-      console.log('NW ', nw);
-      console.log('SE ', se);
-      // create the border box and generate the request path
-      let bbox = L.latLngBounds(nw, se).toBBoxString();
-      let path = '/ws/?bbox=' + bbox + '&zoom_level=' + zoom;
-      return path;
-    }
-  }
-
-  // GET request to SRS PPE API
-  sendPPERequest(path: string, clickPos: any) {
-    this.getApi(WOM_TILES_URL + path, (r: any) => {
-      this.handlePPEData(JSON.parse(r.responseText), clickPos);
-    });
+    //const tiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png', {
   }
 
   // ajax get request
@@ -100,38 +71,49 @@ export class AppComponent {
   }
 
   ngAfterViewInit(): void {
-    this.initMap();
+    // this.initMap();
+    this.requestTiles(12, 13.8106, 43.9985);
   }
 
-  handlePPEData(data: any, clickPos: any) {
-    // exit if there aren't features
-    if (data.features.length <= 0) return;
+  requestTiles(zoom: number, lat: number, lon: number) {
+    const centerTile = this.latLngToTileCoords(lat, lon, zoom);
 
-    // reversing lat lng
-    for (let feature of data.features) {
-      feature.geometry.coordinates.reverse();
+    for (
+      let x_offset = -this.tilesAcross / 2;
+      x_offset <= this.tilesAcross / 2;
+      x_offset++
+    ) {
+      for (
+        let y_offset = -this.tilesDown / 2;
+        y_offset <= this.tilesDown / 2;
+        y_offset++
+      ) {
+        const x = centerTile.x + x_offset;
+        const y = centerTile.y + y_offset;
+
+        // Construct the tile request URL
+        const tileUrl = `http://localhost:8000/api/v1/tiles/${zoom}/${x}/${y}.png`;
+
+        // Send an HTTP GET request to retrieve the tile
+        this.http
+          .get(tileUrl, { responseType: 'blob' })
+          .subscribe((tileImage) => {
+            // Process the tile image, e.g., display it on the map
+            // You can use an <img> tag or other methods to display the image
+          });
+      }
     }
-
-    // sort by distance
-    data.features.sort((a: any, b: any) => {
-      a = a.geometry.coordinates;
-      b = b.geometry.coordinates;
-      return this.distance(a, clickPos) < this.distance(b, clickPos) ? -1 : 1;
-    });
-
-    // get the nearest feature
-    let feature = data.features[0];
-    let ppe = Math.round(feature.ppe * 1000) / 1000;
-
-    // display the related popup
-    L.popup()
-      .setLatLng(feature.geometry.coordinates)
-      .setContent(`<h3>PPE</h3><p>${ppe}</p>`)
-      .openOn(this.map);
   }
 
-  // pythagorean theorem
-  distance(a: any, b: any) {
-    return Math.sqrt(Math.pow(b[0] - a[0], 2) + Math.pow(b[1] - a[1], 2));
+  latLngToTileCoords(lat: number, lng: number, zoom: number) {
+    const n = 2 ** zoom;
+    const x_tile = Math.floor(((lng + 180) / 360) * n);
+    const lat_rad = (lat * Math.PI) / 180;
+    const y_tile = Math.floor(
+      ((1 - Math.log(Math.tan(lat_rad) + 1 / Math.cos(lat_rad)) / Math.PI) /
+        2) *
+        n
+    );
+    return { x: x_tile, y: y_tile };
   }
 }
